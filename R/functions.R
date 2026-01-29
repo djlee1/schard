@@ -173,17 +173,31 @@ h5ad2seurat_spatial = function(filename,use.raw=FALSE,load.obsm=TRUE,simplify=TR
   images = h5ad2images(filename)
   results = list()
 
+  # Check if any images are available
+  has_images = length(images) > 0
+
   # find column all values of each has images
   library_id_field = NULL
-  for(col in colnames(data$obs)){
-    if(all(data$obs[,col] %in% names(images))){
-      library_id_field = col
-      break
+  if(has_images){
+    for(col in colnames(data$obs)){
+      if(all(data$obs[,col] %in% names(images))){
+        library_id_field = col
+        break
+      }
     }
   }
-  # if there is not library field in obs we will only be able to proceed if the h5ad contains single samples:
+  # if there is not library field in obs we will only be able to proceed if the h5ad contains single samples or no images:
   if(is.null(library_id_field)){
-    if(length(images) == 1){
+    if(!has_images){
+      # No images available - create a dummy library_id
+      warning("No images available in h5ad. Creating Seurat object without spatial image.")
+      library_id_field = 'library_id'
+      repeat{
+        if(!(library_id_field %in% colnames(data$obs))) break
+        library_id_field = paste0(library_id_field,'_')
+      }
+      data$obs[,library_id_field] = 'slice1'
+    }else if(length(images) == 1){
       # generate filed name that is not already in use
       library_id_field = 'library_id'
       repeat{
@@ -220,6 +234,13 @@ h5ad2seurat_spatial = function(filename,use.raw=FALSE,load.obsm=TRUE,simplify=TR
       }
     }
 
+    # Skip image processing if no images available
+    if(!has_images || is.null(images[[lid]])){
+      warning(paste0("No image available for '", lid, "'. Skipping image attachment."))
+      results[[lid]] = seu
+      next
+    }
+
     # prepare image
     # set to mock if mesh coordinaates are not in obs
     tissue.positions = obs_
@@ -233,19 +254,22 @@ h5ad2seurat_spatial = function(filename,use.raw=FALSE,load.obsm=TRUE,simplify=TR
 
     scale.factors = images[[lid]]$scale.factors
     # if specified resolution is not in h5ad, try another
-    if(!(img.res %in% names(images[[lid]]))){
-      warning(paste0("'",img.res,"' is not avaliable, trying another resolution"))
-      img.res = setdiff(c('hires','lowres'),img.res)
+    current_img_res = img.res
+    if(!(current_img_res %in% names(images[[lid]]))){
+      warning(paste0("'",current_img_res,"' is not avaliable, trying another resolution"))
+      current_img_res = setdiff(c('hires','lowres'),current_img_res)
     }
-    if(!(img.res %in% names(images[[lid]]))){
-      stop('No image avaliable in h5ad')
+    if(!(current_img_res %in% names(images[[lid]]))){
+      warning(paste0("No image available for '", lid, "'. Skipping image attachment."))
+      results[[lid]] = seu
+      next
     }
 
-    if(img.res != 'lowres'){
-      scale.factors$tissue_lowres_scalef = scale.factors[[paste0('tissue_',img.res,'_scalef')]]
+    if(current_img_res != 'lowres'){
+      scale.factors$tissue_lowres_scalef = scale.factors[[paste0('tissue_',current_img_res,'_scalef')]]
     }
 
-    image = images[[lid]][[img.res]]
+    image = images[[lid]][[current_img_res]]
 
     # lets have something if data is missed
     # as it is used for unnormalized.radius that is essential for plotting
